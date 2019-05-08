@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/pkg/errors"
@@ -16,6 +17,7 @@ import (
 func NewWebSSH() *WebSSH {
 	return &WebSSH{
 		buffSize: 512,
+		expired:  time.Minute,
 		logger:   log.New(ioutil.Discard, "[webssh] ", log.Ltime|log.Ldate),
 	}
 }
@@ -24,11 +26,14 @@ func NewWebSSH() *WebSSH {
 type WebSSH struct {
 	logger   *log.Logger
 	store    sync.Map
+	expired  time.Duration
 	buffSize uint32
 }
 type storeValue struct {
+	id        string
 	websocket *websocket.Conn
 	conn      net.Conn
+	createdAt time.Time
 }
 
 // SetLogger set logger
@@ -37,14 +42,29 @@ func (ws *WebSSH) SetLogger(logger *log.Logger) *WebSSH {
 	return ws
 }
 
+// SetBuffSize set buff size
+func (ws *WebSSH) SetBuffSize(buffSize uint32) *WebSSH {
+	ws.buffSize = buffSize
+	return ws
+}
+
+// SetExpired set logger
+func (ws *WebSSH) SetExpired(expired time.Duration) *WebSSH {
+	ws.expired = expired
+	return ws
+}
+
 // AddWebsocket add websocket connect
 func (ws *WebSSH) AddWebsocket(id string, conn *websocket.Conn) {
 	ws.logger.Println("add websocket")
-	v, loaded := ws.store.LoadOrStore(id, storeValue{websocket: conn})
+
+	ws.checkExpired()
+	v, loaded := ws.store.LoadOrStore(id, &storeValue{websocket: conn, id: id, createdAt: time.Now()})
 	if !loaded {
 		return
 	}
-	value := v.(storeValue)
+	ws.store.Delete(id)
+	value := v.(*storeValue)
 	value.websocket = conn
 	ws.logger.Println("ready", value)
 	go func() {
@@ -55,11 +75,14 @@ func (ws *WebSSH) AddWebsocket(id string, conn *websocket.Conn) {
 // AddSSHConn add ssh netword connect
 func (ws *WebSSH) AddSSHConn(id string, conn net.Conn) {
 	ws.logger.Println("add ssh conn")
-	v, loaded := ws.store.LoadOrStore(id, storeValue{conn: conn})
+
+	ws.checkExpired()
+	v, loaded := ws.store.LoadOrStore(id, &storeValue{conn: conn, id: id, createdAt: time.Now()})
 	if !loaded {
 		return
 	}
-	value := v.(storeValue)
+	ws.store.Delete(id)
+	value := v.(*storeValue)
 	value.conn = conn
 	ws.logger.Println("server", value)
 	go func() {
@@ -67,8 +90,25 @@ func (ws *WebSSH) AddSSHConn(id string, conn net.Conn) {
 	}()
 }
 
+func (ws *WebSSH) checkExpired() {
+	now := time.Now()
+	ws.store.Range(func(key, v interface{}) bool {
+		value := v.(*storeValue)
+		if now.Sub(value.createdAt) > time.Minute {
+			ws.store.Delete(key)
+			if value.websocket != nil {
+				value.websocket.Close()
+			}
+			if value.conn != nil {
+				value.conn.Close()
+			}
+		}
+		return true
+	})
+}
+
 // server 对接ssh和websocket
-func (ws *WebSSH) server(value storeValue) error {
+func (ws *WebSSH) server(value *storeValue) error {
 	defer value.websocket.Close()
 	defer value.conn.Close()
 
