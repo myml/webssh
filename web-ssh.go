@@ -134,7 +134,7 @@ func (ws *WebSSH) server(value *storeValue) error {
 			config.User = string(msg.Data)
 		case messageTypePassword:
 			config.Auth = append(config.Auth, ssh.Password(string(msg.Data)))
-			session, err = ws.newSSHXtermSession(value.conn, &config)
+			session, err = ws.newSSHXtermSession(value.conn, &config, msg)
 			if err != nil {
 				return errors.Wrap(err, "password")
 			}
@@ -152,8 +152,6 @@ func (ws *WebSSH) server(value *storeValue) error {
 			if err != nil {
 				return errors.Wrap(err, "shell")
 			}
-		case messageTypePublickey:
-			return errors.New("no support publickey")
 		case messageTypeStdin:
 			if stdin == nil {
 				ws.logger.Println("stdin wait login")
@@ -177,7 +175,7 @@ func (ws *WebSSH) server(value *storeValue) error {
 }
 
 // newSSHXtermSession start ssh xterm session
-func (ws *WebSSH) newSSHXtermSession(conn net.Conn, config *ssh.ClientConfig) (*ssh.Session, error) {
+func (ws *WebSSH) newSSHXtermSession(conn net.Conn, config *ssh.ClientConfig, msg message) (*ssh.Session, error) {
 	var err error
 	c, chans, reqs, err := ssh.NewClientConn(conn, conn.RemoteAddr().String(), config)
 	if err != nil {
@@ -188,7 +186,13 @@ func (ws *WebSSH) newSSHXtermSession(conn net.Conn, config *ssh.ClientConfig) (*
 		return nil, errors.Wrap(err, "session")
 	}
 	modes := ssh.TerminalModes{ssh.ECHO: 1, ssh.TTY_OP_ISPEED: ws.buffSize, ssh.TTY_OP_OSPEED: ws.buffSize}
-	session.RequestPty("xterm", 40, 80, modes)
+	if msg.Cols == 0 {
+		msg.Cols = 40
+	}
+	if msg.Rows == 0 {
+		msg.Rows = 80
+	}
+	session.RequestPty("xterm", msg.Rows, msg.Cols, modes)
 	return session, nil
 }
 
