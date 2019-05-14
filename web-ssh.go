@@ -48,6 +48,12 @@ func (ws *WebSSH) SetBuffSize(buffSize uint32) *WebSSH {
 	return ws
 }
 
+// SetLogOut set logger output
+func (ws *WebSSH) SetLogOut(out io.Writer) *WebSSH {
+	ws.logger.SetOutput(out)
+	return ws
+}
+
 // SetExpired set logger
 func (ws *WebSSH) SetExpired(expired time.Duration) *WebSSH {
 	ws.expired = expired
@@ -56,17 +62,15 @@ func (ws *WebSSH) SetExpired(expired time.Duration) *WebSSH {
 
 // AddWebsocket add websocket connect
 func (ws *WebSSH) AddWebsocket(id string, conn *websocket.Conn) {
-	ws.logger.Println("add websocket")
+	ws.logger.Println("add websocket", id)
 
 	ws.checkExpired()
 	v, loaded := ws.store.LoadOrStore(id, &storeValue{websocket: conn, id: id, createdAt: time.Now()})
 	if !loaded {
 		return
 	}
-	ws.store.Delete(id)
 	value := v.(*storeValue)
 	value.websocket = conn
-	ws.logger.Println("ready", value)
 	go func() {
 		ws.logger.Printf("%s server exit %v", id, ws.server(value))
 	}()
@@ -74,17 +78,15 @@ func (ws *WebSSH) AddWebsocket(id string, conn *websocket.Conn) {
 
 // AddSSHConn add ssh netword connect
 func (ws *WebSSH) AddSSHConn(id string, conn net.Conn) {
-	ws.logger.Println("add ssh conn")
+	ws.logger.Println("add ssh conn", id)
 
 	ws.checkExpired()
 	v, loaded := ws.store.LoadOrStore(id, &storeValue{conn: conn, id: id, createdAt: time.Now()})
 	if !loaded {
 		return
 	}
-	ws.store.Delete(id)
 	value := v.(*storeValue)
 	value.conn = conn
-	ws.logger.Println("server", value)
 	go func() {
 		ws.logger.Printf("(%s) server exit %v", id, ws.server(value))
 	}()
@@ -107,8 +109,10 @@ func (ws *WebSSH) checkExpired() {
 	})
 }
 
-// server 对接ssh和websocket
+// server connect ssh conn to websocket
 func (ws *WebSSH) server(value *storeValue) error {
+	ws.store.Delete(value.id)
+	ws.logger.Println("server", value)
 	defer value.websocket.Close()
 	defer value.conn.Close()
 
@@ -140,7 +144,7 @@ func (ws *WebSSH) server(value *storeValue) error {
 				return errors.Wrap(err, "stdin")
 			}
 			defer stdin.Close()
-			err = ws.transferOutput(session, value.websocket)
+			err = ws.transformOutput(session, value.websocket)
 			if err != nil {
 				return errors.Wrap(err, "stdout & stderr")
 			}
@@ -172,7 +176,7 @@ func (ws *WebSSH) server(value *storeValue) error {
 	}
 }
 
-// 开始一个ssh xterm回话
+// newSSHXtermSession start ssh xterm session
 func (ws *WebSSH) newSSHXtermSession(conn net.Conn, config *ssh.ClientConfig) (*ssh.Session, error) {
 	var err error
 	c, chans, reqs, err := ssh.NewClientConn(conn, conn.RemoteAddr().String(), config)
@@ -188,8 +192,8 @@ func (ws *WebSSH) newSSHXtermSession(conn net.Conn, config *ssh.ClientConfig) (*
 	return session, nil
 }
 
-// 转换标准输出标准错误为消息并发送到websocket
-func (ws *WebSSH) transferOutput(session *ssh.Session, conn *websocket.Conn) error {
+// transformOutput transform shell stdout to websocket message
+func (ws *WebSSH) transformOutput(session *ssh.Session, conn *websocket.Conn) error {
 	ws.logger.Println("transfer")
 	stdout, err := session.StdoutPipe()
 	if err != nil {

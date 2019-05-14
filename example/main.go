@@ -5,7 +5,7 @@ import (
 	"net"
 	"net/http"
 
-	"webssh"
+	"github.com/myml/webssh"
 
 	"github.com/gorilla/websocket"
 )
@@ -27,5 +27,6 @@ func main() {
 		}
 		wssh.AddWebsocket(id, ws)
 	})
+	log.Println("start")
 	http.ListenAndServe(":8000", nil)
 }

@@ -1,4 +1,4 @@
-module webssh
+module github.com/myml/webssh
 
 go 1.12
 
